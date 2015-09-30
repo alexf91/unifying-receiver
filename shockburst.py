@@ -17,6 +17,11 @@ class EnhancedShockburstPacket(object):
     """
     An Enhanced Shockburst packet
     """
+
+    address = property(lambda self: self._packet[0:self._addrlen*8].tobytes())
+    addrlen = property(lambda self: self._addrlen)
+    crclen  = property(lambda self: self._crclen)
+
     def __init__(self, address, payload, crc, pid=0, noack=0):
         """
         Initializes a new Enhanced Shockburst packet.
@@ -45,6 +50,8 @@ class EnhancedShockburstPacket(object):
         packet.frombytes(crc)
 
         self._packet = packet
+        self._crclen = len(crc)
+        self._addrlen = len(address)
 
     @classmethod
     def from_bitarray(cls, bitstream, addr_len=5, crc_len=2, raw=False, tries=4):
@@ -65,8 +72,15 @@ class EnhancedShockburstPacket(object):
             pid_idx  = size_idx + 6
             noack_idx = pid_idx + 2
             pld_idx  = pid_idx + 1
-            size = int(bitstream[size_idx:size_idx+6].to01(), 2)
+            try:
+                size = int(bitstream[size_idx:size_idx+6].to01(), 2)
+            except:
+                continue
+
             crc_idx  = pld_idx + size*8
+
+            if len(bitstream[addr_idx:crc_idx+crc_len*8]) != (crc_idx+crc_len*8 - addr_idx):
+                continue
 
             address = bitstream[addr_idx : size_idx].tobytes()
             pid     = int(bitstream[pid_idx : pid_idx+2].to01(), 2)
@@ -90,8 +104,7 @@ class EnhancedShockburstPacket(object):
         raise ShockburstError('No valid packet found')
 
     def __str__(self):
-        return self._packet.to01()
-
+        return ''.join([hex(ord(x))[2:].zfill(2) for x in self.address])
 
     @staticmethod
     def crc8(bitstream):
@@ -117,14 +130,10 @@ class EnhancedShockburstPacket(object):
 
         return bitarray(bin(crc)[2:].zfill(16))
 
+
+
 if __name__ == '__main__':
     msg = '010101010100111111101100100100000010100000001101001010100000000001100001000000000000000001111111111001111111111110000000000000000011100011000010110101100'
     packet = EnhancedShockburstPacket.from_bitarray(bitarray(msg), addr_len=5, crc_len=2, raw=True, tries=8)
     print(packet)
-
-
-
-
-
-
 

@@ -11,7 +11,6 @@ from gnuradio import analog
 from gnuradio import digital
 from gnuradio import gr
 import osmosdr
-import sampling
 
 from bitarray import bitarray
 import numpy as np
@@ -168,22 +167,6 @@ class RawPacketSink(gr.sync_block):
         return regions
 
 
-class Printer(threading.Thread):
-    def __init__(self, queue):
-        threading.Thread.__init__(self)
-        self.running = True
-        self.queue = queue
-
-    def run(self):
-        while self.running:
-            try:
-                packet = queue.get(timeout=0.1)
-                print(''.join([str(x) for x in packet]))
-            except Empty:
-                pass
-
-    def stop(self):
-        self.running = False
 
 
 if __name__ == '__main__':
