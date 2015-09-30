@@ -45,29 +45,44 @@ class TopBlock(gr.top_block):
         # Mix to baseband
         lowpass = filter.firdes.low_pass(samp_rate / resamp_rate, samp_rate, bandwidth, sharpness)
         self.rf_filter = filter.freq_xlating_fir_filter_ccc(1, lowpass, offset, samp_rate)
-        
+        self.connect(self.source, (self.rf_filter, 0))
+
         # Quadrature demodulation
         self.demod = analog.quadrature_demod_cf(samp_rate/(2*math.pi*fsk_deviation/8.0))
+        self.connect(self.rf_filter, (self.demod, 0))
 
         # Binary slicer
         self.slicer = digital.binary_slicer_fb()
-
-        # Symbol recovery
-        self.recovery = sampling.symbol_recovery(samp_per_symb)
-
-        # Stream into packet detector for further use
-        # packet size is set to the maximum allowed shockburst length
-        self.sink = PacketSink(42*8, self.queue, '0101010101001111111')
-
-        # Connect the blocks
-        self.connect(self.source, (self.rf_filter, 0))
-        self.connect(self.rf_filter, (self.demod, 0))
         self.connect(self.demod, (self.slicer, 0))
-        self.connect(self.slicer, (self.recovery, 0))
-        self.connect(self.recovery, (self.sink, 0))
 
-        #self.debug  = blocks.file_sink(gr.sizeof_char, 'debug.bin', False)
-        #self.connect(self.recovery, (self.debug, 0))
+        # Detect the carrier
+        self.mag = blocks.complex_to_mag(1)
+        self.connect(self.rf_filter, (self.mag, 0))
+
+        # Floating average
+        self.avg = blocks.moving_average_ff(50, 1/50., 4000)
+        self.connect(self.mag, (self.avg, 0))
+
+        # Subtract some offset
+        self.offset = blocks.add_const_vff((-0.01, ))
+        self.connect(self.avg, (self.offset, 0))
+
+        # Binary signal from carrier
+        self.carrier_slicer = digital.binary_slicer_fb()
+        self.connect(self.offset, (self.carrier_slicer, 0))
+
+        # Burst tagger needs short
+        self.conv =  blocks.char_to_short(1)
+        self.connect(self.carrier_slicer, (self.conv, 0))
+
+        self.tagger = blocks.burst_tagger(gr.sizeof_char)
+        self.tagger.set_true_tag("burst",True)
+        self.tagger.set_false_tag("burst",False)
+        self.connect(self.slicer, (self.tagger, 0))
+        self.connect(self.conv, (self.tagger, 1))
+
+        self.tagged_sink = blocks.tagged_file_sink(gr.sizeof_char*1, resamp_rate)
+        self.connect(self.tagger, (self.tagged_sink, 0))
 
 class SymbolRecovery(gr.basic_block):
     """
@@ -87,14 +102,14 @@ class SymbolRecovery(gr.basic_block):
     def general_work(self, input_items, output_items):
         in0 = input_items[0]
         out = output_items[0]
-        
+
         produced = 0
         consumed = 0
         for bit in in0:
             if bit != self.last:
                 self.counter = 0
             self.counter += 1
-            
+
             if self.counter % self.samp_per_symb == self.samp_per_symb//2:
                 out[produced] = bit
                 produced += 1
@@ -142,7 +157,7 @@ class PacketSink(gr.sync_block):
             packet = np.zeros(self.packetsize, dtype=np.byte)
             packet[:self.preamble.size-1] = self.preamble[:-1]
             self.packets.append((self.preamble.size-1, packet))
-        
+
         for i, (index, packet) in enumerate(self.packets):
             packet[index] = sample
             index += 1
@@ -167,7 +182,7 @@ class Printer(threading.Thread):
                 print(''.join([str(x) for x in packet]))
             except Empty:
                 pass
-    
+
     def stop(self):
         self.running = False
 
@@ -176,7 +191,7 @@ if __name__ == '__main__':
     queue = Queue()
     printer = Printer(queue)
     printer.start()
-    top = TopBlock(2401500000, queue)
+    top = TopBlock(2458500000, queue)
     top.run()
     printer.stop()
 
