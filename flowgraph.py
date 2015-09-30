@@ -13,6 +13,7 @@ from gnuradio import gr
 import osmosdr
 import sampling
 
+from bitarray import bitarray
 import numpy as np
 
 
@@ -106,7 +107,7 @@ class RawPacketSink(gr.sync_block):
         self.samp_counter = 0
         self.last_sample = 0
         self.samp_processed = 0
-        self.symbols = []
+        self.symbols = bitarray()
 
     def work(self, input_items, output_items):
         in0 = input_items[0]
@@ -133,8 +134,8 @@ class RawPacketSink(gr.sync_block):
             if done:
                 self.samp_processed = 0
                 self.samp_counter = 0
-                self.queue.put(self.symbols[:])
-                self.symbols = []
+                self.queue.put(self.symbols.copy())
+                self.symbols = bitarray()
                 self.last_sample = 0
 
         return in0.size
