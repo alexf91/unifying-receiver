@@ -2,6 +2,7 @@
 
 import math
 import threading
+import datetime
 from Queue import Queue, Empty
 
 from gnuradio import blocks
@@ -20,13 +21,13 @@ class TopBlock(gr.top_block):
     Prefilter the raw IQ stream and convert it to possible packets,
     which get put into queue for further analysis.
     """
-    def __init__(self, center_freq, queue):
+    def __init__(self, queue):
         gr.top_block.__init__(self)
 
         self.queue = queue
 
         samp_rate = 18000000
-        bandwidth = 2500000
+        bandwidth = 3000000
         sharpness = 300000
         offset    = 3500000
         fsk_deviation = 300000
@@ -36,7 +37,7 @@ class TopBlock(gr.top_block):
         # BladeRF source
         self.source = osmosdr.source('bladerf=0')
         self.source.set_sample_rate(samp_rate)
-        self.source.set_center_freq(center_freq, 0)
+        self.source.set_center_freq(2400000000, 0)
         self.source.set_bandwidth(samp_rate)
         #self.source.set_gain(10, 0)
         #self.source.set_if_gain(20, 0)
@@ -81,92 +82,89 @@ class TopBlock(gr.top_block):
         self.connect(self.slicer, (self.tagger, 0))
         self.connect(self.conv, (self.tagger, 1))
 
-        self.tagged_sink = blocks.tagged_file_sink(gr.sizeof_char*1, resamp_rate)
-        self.connect(self.tagger, (self.tagged_sink, 0))
+        #self.tagged_sink = blocks.tagged_file_sink(gr.sizeof_char*1, resamp_rate)
+        #self.connect(self.tagger, (self.tagged_sink, 0))
+        self.packet_sink = RawPacketSink(samp_per_symb, self.queue, 500)
+        self.connect(self.tagger, (self.packet_sink, 0))
 
-class SymbolRecovery(gr.basic_block):
+    def set_frequency(self, frequency):
+        self.source.set_center_freq(frequency, 0)
+
+class RawPacketSink(gr.sync_block):
     """
-    Read stream of samples and generate symbols by
-    simply sampling at samp_per_symb//2
+    Detect 'burst' packets with a minimum length of 'minlength' samples and
+    output them into the queue for further processing.
     """
-    def __init__(self, samp_per_symb):
-        gr.basic_block.__init__(self,
-            name='SymbolRecovery',
-            in_sig=[np.byte],
-            out_sig=[np.byte])
-
-        self.samp_per_symb = samp_per_symb
-        self.counter = 0
-        self.last = 0
-
-    def general_work(self, input_items, output_items):
-        in0 = input_items[0]
-        out = output_items[0]
-
-        produced = 0
-        consumed = 0
-        for bit in in0:
-            if bit != self.last:
-                self.counter = 0
-            self.counter += 1
-
-            if self.counter % self.samp_per_symb == self.samp_per_symb//2:
-                out[produced] = bit
-                produced += 1
-
-            self.last = bit
-            consumed += 1
-
-            if produced == out.size:
-                break
-
-        self.consume(0, consumed)
-        return produced
-
-
-class PacketSink(gr.sync_block):
-    """
-    Detects possible packets with a given preamble and output
-    blocks of size packetsize to queue for analysis outside of
-    gnuradio.
-    """
-    def __init__(self, packetsize, queue, preamble='01010101'):
+    def __init__(self, samp_per_symb, queue, min_length=0):
         gr.sync_block.__init__(self, name='PacketDetector', in_sig=[np.byte], out_sig=None)
-        self.packetsize = packetsize
+        self.samp_per_symb = samp_per_symb
         self.queue = queue
+        self.min_length = min_length
 
-        self.preamble = np.array([int(x) for x in preamble], dtype=np.byte)
+        self.decoding = False
 
-        self.backlog = np.zeros(len(preamble), dtype=np.byte)
-        self.packets = []
+        self.samp_counter = 0
+        self.last_sample = 0
+        self.samp_processed = 0
+        self.symbols = []
 
     def work(self, input_items, output_items):
         in0 = input_items[0]
 
-        for sample in in0:
-            self._process_sample(sample)
+        regions = self.create_regions(in0.size)
 
-        return len(input_items[0])
+        for start, stop, done in regions:
+            if self.samp_processed == 0 and (stop - start) < self.min_length:
+                continue
 
-    def _process_sample(self, sample):
-        self.backlog = np.roll(self.backlog, -1)
-        self.backlog[-1] = sample
+            for i in range(start, stop):
+                bit = in0[i]
+                if self.last_sample != bit:
+                    self.samp_counter = 0
 
-        if np.all(self.backlog == self.preamble):
-            self.backlog = np.zeros(self.preamble.size, dtype=np.byte)
-            packet = np.zeros(self.packetsize, dtype=np.byte)
-            packet[:self.preamble.size-1] = self.preamble[:-1]
-            self.packets.append((self.preamble.size-1, packet))
+                self.samp_counter += 1
+                if self.samp_counter % self.samp_per_symb == self.samp_per_symb//2:
+                    self.symbols.append(bit)
 
-        for i, (index, packet) in enumerate(self.packets):
-            packet[index] = sample
-            index += 1
+                self.last_sample = bit
 
-            if index == self.packetsize:
-                self.queue.put(packet)
-                del self.packets[i]
+            self.samp_processed += (stop - start)
+
+            if done:
+                self.samp_processed = 0
+                self.samp_counter = 0
+                self.queue.put(self.symbols[:])
+                self.symbols = []
+                self.last_sample = 0
+
+        return in0.size
+
+    def create_regions(self, nitems):
+        nread = self.nitems_read(0) #number of items read on port 0
+        tags = map(gr.tag_to_python, self.get_tags_in_range(0, nread, nread+nitems))
+        regions = []
+        decoding = self.decoding
+
+        start = 0
+        for tag in tags:
+            if decoding:
+                assert not tag.value
+                stop = tag.offset - nread
+                assert stop >= 0
+                regions.append((start, stop, True))
+                decoding = False
             else:
-                self.packets[i] = (index, packet)
+                assert tag.value
+                start = tag.offset - nread
+                assert start >= 0
+                decoding = True
+
+        if decoding:
+            stop = nitems
+            regions.append((start, stop, False))
+
+        self.decoding = decoding
+        return regions
 
 
 class Printer(threading.Thread):
@@ -191,7 +189,8 @@ if __name__ == '__main__':
     queue = Queue()
     printer = Printer(queue)
     printer.start()
-    top = TopBlock(2458500000, queue)
-    top.run()
+    receiver = TopBlock(queue)
+    receiver.set_frequency(2431500000)
+    receiver.run()
     printer.stop()
 
