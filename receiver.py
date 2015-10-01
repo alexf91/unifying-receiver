@@ -9,17 +9,32 @@ from Queue import Queue, Empty
 import flowgraph
 import shockburst
 
+def bytes_to_hexstring(bytes, seperator=''):
+        return seperator.join([hex(ord(x))[2:].zfill(2) for x in bytes])
+
 class Printer(threading.Thread):
-    def __init__(self, queue):
+    def __init__(self, queue, exclude=None, include=None, ignore_ack=False):
         threading.Thread.__init__(self)
         self.running = True
         self.queue = queue
+        self.exclude = exclude
+        self.include = include
+        self.ignore_ack = ignore_ack
 
     def run(self):
         while self.running:
             try:
                 packet = self.queue.get(timeout=0.1)
-                print(packet)
+                address = bytes_to_hexstring(packet.address)
+                if packet.size == 0 and self.ignore_ack:
+                    continue
+
+                if self.exclude and address in self.exclude:
+                    continue
+
+                if not self.include or address in self.include:
+                    print(packet)
+
             except Empty:
                 pass
 
@@ -73,6 +88,30 @@ class Decoder(threading.Thread):
         self.running = False
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--channel-time', default=0.2, type=float,
+                        help='Time for each channel while searching')
+    parser.add_argument('-t', '--timeout', default=5, type=float,
+                        help='Timeout until searching starts again')
+    parser.add_argument('-e', '--exclude', default=None, type=str,
+                        help='Exclude given addresses (comma seperated)')
+    parser.add_argument('-i', '--include', default=None, type=str,
+                        help='Include given addresses (comma seperated)')
+    parser.add_argument('--ignore-ack', action='store_true',
+                        help='Ignore packets with empty payload')
+
+    args = parser.parse_args()
+
+    if args.exclude and args.include:
+        print("--exclude and --include can't be used together")
+        return 1
+
+    if args.exclude is not None:
+        args.exclude = args.exclude.split(',')
+
+    if args.include is not None:
+        args.include = args.include.split(',')
+
     # Raw packets from flowgraph to packet decoder
     raw_queue = Queue()
 
@@ -80,9 +119,9 @@ def main():
     packet_queue = Queue()
 
     receiver = flowgraph.TopBlock(raw_queue)
-    decoder =  Decoder(raw_queue, packet_queue, sweep_timeout=0.1,
-                       set_freq_fnc=receiver.set_frequency, locked_timeout=10)
-    printer = Printer(packet_queue)
+    decoder =  Decoder(raw_queue, packet_queue, sweep_timeout=args.channel_time,
+                       set_freq_fnc=receiver.set_frequency, locked_timeout=args.timeout)
+    printer = Printer(packet_queue, args.exclude, args.include, args.ignore_ack)
 
     decoder.start()
     printer.start()

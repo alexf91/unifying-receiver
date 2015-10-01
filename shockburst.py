@@ -113,7 +113,7 @@ class Packet(object):
         else:
             payload = 'ACK'
 
-        return '{} - {}'.format(address, payload)
+        return '{}-{} - {}'.format(address, self.pid, payload)
 
     @staticmethod
     def crc8(bitstream):
