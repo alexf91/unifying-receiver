@@ -38,7 +38,7 @@ class TopBlock(gr.top_block):
         self.source = osmosdr.source('bladerf=0')
         self.source.set_sample_rate(samp_rate)
         self.source.set_center_freq(2400000000, 0)
-        self.source.set_bandwidth(samp_rate)
+        self.source.set_bandwidth(12000000)
         #self.source.set_gain(10, 0)
         #self.source.set_if_gain(20, 0)
         #self.source.set_bb_gain(20, 0)
@@ -49,7 +49,7 @@ class TopBlock(gr.top_block):
         self.connect(self.source, (self.rf_filter, 0))
 
         # Quadrature demodulation
-        self.demod = analog.quadrature_demod_cf(samp_rate/(2*math.pi*fsk_deviation/8.0))
+        self.demod = analog.quadrature_demod_cf(resamp_rate/(2*math.pi*fsk_deviation/8.0))
         self.connect(self.rf_filter, (self.demod, 0))
 
         # Binary slicer
@@ -60,8 +60,8 @@ class TopBlock(gr.top_block):
         self.mag = blocks.complex_to_mag(1)
         self.connect(self.rf_filter, (self.mag, 0))
 
-        # Floating average
-        self.avg = blocks.moving_average_ff(50, 1/50., 4000)
+        # Moving average
+        self.avg = blocks.moving_average_ff(20, 1/20., 4000)
         self.connect(self.mag, (self.avg, 0))
 
         # Subtract some offset
@@ -76,14 +76,28 @@ class TopBlock(gr.top_block):
         self.conv =  blocks.char_to_short(1)
         self.connect(self.carrier_slicer, (self.conv, 0))
 
+        # Delay the detected carrier by a couple of symbols
+        self.delay = blocks.delay(gr.sizeof_short, samp_per_symb*30)
+        self.connect(self.conv, (self.delay, 0))
+
         self.tagger = blocks.burst_tagger(gr.sizeof_char)
         self.tagger.set_true_tag("burst",True)
         self.tagger.set_false_tag("burst",False)
         self.connect(self.slicer, (self.tagger, 0))
-        self.connect(self.conv, (self.tagger, 1))
+        self.connect(self.delay, (self.tagger, 1))
 
         #self.tagged_sink = blocks.tagged_file_sink(gr.sizeof_char*1, resamp_rate)
         #self.connect(self.tagger, (self.tagged_sink, 0))
+
+        #self.carrier_sink = blocks.file_sink(gr.sizeof_float, 'carrier.raw', False)
+        #self.connect(self.offset, (self.carrier_sink, 0))
+
+        #self.raw_sink = blocks.file_sink(gr.sizeof_gr_complex, 'iq.raw', False)
+        #self.connect(self.source, (self.raw_sink, 0))
+
+        #self.quad_sink = blocks.file_sink(gr.sizeof_float, 'quadrature.raw', False)
+        #self.connect(self.demod, (self.quad_sink, 0))
+
         self.packet_sink = RawPacketSink(samp_per_symb, self.queue, 500)
         self.connect(self.tagger, (self.packet_sink, 0))
 
@@ -174,7 +188,7 @@ if __name__ == '__main__':
     printer = Printer(queue)
     printer.start()
     receiver = TopBlock(queue)
-    receiver.set_frequency(2431500000)
+    receiver.set_frequency(2467500000)
     receiver.run()
     printer.stop()
 

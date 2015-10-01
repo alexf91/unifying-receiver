@@ -2,25 +2,21 @@
 
 from bitarray import bitarray
 
-class ShockburstError(Exception):
+class PacketError(Exception):
     pass
 
-class EnhancedShockburstConfig(object):
-    addressLength = property(lambda self: self._addressLength)
-    crcLength     = property(lambda self: self._crcLength)
-
-    def __init__(self, addressLength, crcLength):
-        self._addressLength = addressLength
-        self._crcLength = crcLength
-
-class EnhancedShockburstPacket(object):
+class Packet(object):
     """
     An Enhanced Shockburst packet
     """
 
-    address = property(lambda self: self._packet[0:self._addrlen*8].tobytes())
+    address = property(lambda self: self._packet[self._addr_idx:self._size_idx].tobytes())
+    size    = property(lambda self: int(self._packet[self._size_idx:self._pid_idx].to01(), 2))
+    pid     = property(lambda self: int(self._packet[self._pid_idx:self._noack_idx].to01(), 2))
+    payload = property(lambda self: self._packet[self._pld_idx:self._crc_idx].tobytes())
     addrlen = property(lambda self: self._addrlen)
     crclen  = property(lambda self: self._crclen)
+    packet  = property(lambda self: self._packet.copy())
 
     def __init__(self, address, payload, crc, pid=0, noack=0):
         """
@@ -36,10 +32,10 @@ class EnhancedShockburstPacket(object):
         """
 
         if len(payload) > 32:
-            raise ShockburstError('Payload too long')
+            raise PacketError('Payload too long')
 
         if not (0 <= pid <= 3):
-            raise ShockburstError('Invalid packet ID')
+            raise PacketError('Invalid packet ID')
 
         packet = bitarray()
         packet.frombytes(address)
@@ -52,6 +48,13 @@ class EnhancedShockburstPacket(object):
         self._packet = packet
         self._crclen = len(crc)
         self._addrlen = len(address)
+
+        self._addr_idx = 0
+        self._size_idx = self._addrlen * 8
+        self._pid_idx  = self._size_idx + 6
+        self._noack_idx = self._pid_idx + 2
+        self._pld_idx  = self._noack_idx + 1
+        self._crc_idx  = self._pld_idx + len(payload)*8
 
     @classmethod
     def from_bitarray(cls, bitstream, addr_len=5, crc_len=2, raw=False, tries=4):
@@ -71,7 +74,7 @@ class EnhancedShockburstPacket(object):
             size_idx = addr_idx + addr_len*8
             pid_idx  = size_idx + 6
             noack_idx = pid_idx + 2
-            pld_idx  = pid_idx + 1
+            pld_idx  = noack_idx + 1
             try:
                 size = int(bitstream[size_idx:size_idx+6].to01(), 2)
             except:
@@ -93,7 +96,7 @@ class EnhancedShockburstPacket(object):
             elif crc_len == 2:
                 calc_crc = cls.crc16(bitstream[addr_idx : crc_idx])
             else:
-                raise ShockburstError('Wrong CRC length')
+                raise PacketError('Wrong CRC length')
 
             if calc_crc != crc:
                 continue
@@ -101,10 +104,16 @@ class EnhancedShockburstPacket(object):
             crc = crc.tobytes()
             return cls(address, payload, crc, pid, noack)
 
-        raise ShockburstError('No valid packet found')
+        raise PacketError('No valid packet found')
 
     def __str__(self):
-        return ''.join([hex(ord(x))[2:].zfill(2) for x in self.address])
+        address  = ''.join([hex(ord(x))[2:].zfill(2) for x in self.address])
+        if self.size:
+            payload  = ' '.join([hex(ord(x))[2:].zfill(2) for x in self.payload])
+        else:
+            payload = 'ACK'
+
+        return '{} - {}'.format(address, payload)
 
     @staticmethod
     def crc8(bitstream):
@@ -134,6 +143,6 @@ class EnhancedShockburstPacket(object):
 
 if __name__ == '__main__':
     msg = '010101010100111111101100100100000010100000001101001010100000000001100001000000000000000001111111111001111111111110000000000000000011100011000010110101100'
-    packet = EnhancedShockburstPacket.from_bitarray(bitarray(msg), addr_len=5, crc_len=2, raw=True, tries=8)
+    packet = Packet.from_bitarray(bitarray(msg), addr_len=5, crc_len=2, raw=True, tries=8)
     print(packet)
 
