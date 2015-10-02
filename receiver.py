@@ -2,90 +2,11 @@
 
 import sys
 import argparse
-import threading
-from datetime import datetime, timedelta
 from Queue import Queue, Empty
 
 import flowgraph
-import shockburst
+import blocks
 
-def bytes_to_hexstring(bytes, seperator=''):
-        return seperator.join([hex(ord(x))[2:].zfill(2) for x in bytes])
-
-class Printer(threading.Thread):
-    def __init__(self, queue, exclude=None, include=None, ignore_ack=False):
-        threading.Thread.__init__(self)
-        self.running = True
-        self.queue = queue
-        self.exclude = exclude
-        self.include = include
-        self.ignore_ack = ignore_ack
-
-    def run(self):
-        while self.running:
-            try:
-                packet = self.queue.get(timeout=0.1)
-                address = bytes_to_hexstring(packet.address)
-                if packet.size == 0 and self.ignore_ack:
-                    continue
-
-                if self.exclude and address in self.exclude:
-                    continue
-
-                if not self.include or address in self.include:
-                    print(packet)
-
-            except Empty:
-                pass
-
-    def stop(self):
-        self.running = False
-
-class Decoder(threading.Thread):
-    def __init__(self, raw_queue, packet_queue, set_freq_fnc=None, locked_timeout=2,
-                 sweep_timeout=1):
-        threading.Thread.__init__(self)
-        self.running = True
-        self.raw_queue = raw_queue
-        self.packet_queue = packet_queue
-        self.set_freq = set_freq_fnc
-        self.locked_timeout = locked_timeout
-        self.sweep_timeout = sweep_timeout
-
-    def run(self):
-        channels = [2401500000, 2404500000, 2407500000, 2410500000, 2413500000,
-                    2416500000, 2419500000, 2422500000, 2425500000, 2428500000,
-                    2431500000, 2434500000, 2437500000, 2440500000, 2443500000,
-                    2446500000, 2449500000, 2452500000, 2455500000, 2458500000,
-                    2461500000, 2464500000, 2467500000, 2470500000]
-
-        freq_idx = 0
-        last_recv = datetime.now()
-        timeout = self.sweep_timeout
-        if self.set_freq is not None:
-            self.set_freq(channels[0])
-
-        while self.running:
-            try:
-                raw = self.raw_queue.get(timeout=0.1)
-                packet = shockburst.Packet.from_bitarray(
-                    raw, addr_len=5, crc_len=2, raw=True, tries=8)
-
-                self.packet_queue.put(packet)
-                last_recv = datetime.now()
-                timeout = self.locked_timeout
-            except (Empty, shockburst.PacketError):
-                pass
-
-            if (datetime.now() - last_recv).total_seconds() > timeout and self.set_freq:
-                freq_idx = (freq_idx + 1) % len(channels)
-                self.set_freq(channels[freq_idx])
-                print('Switching to channel {}'.format(freq_idx))
-                last_recv = datetime.now()
-                timeout = self.sweep_timeout
-
-    def stop(self):
-        self.running = False
 
 def main():
     parser = argparse.ArgumentParser()
@@ -99,6 +20,7 @@ def main():
                         help='Include given addresses (comma seperated)')
     parser.add_argument('--ignore-ack', action='store_true',
                         help='Ignore packets with empty payload')
+    parser.add_argument('-s', '--squelch', type=int, default=-30)
 
     args = parser.parse_args()
 
@@ -118,16 +40,23 @@ def main():
     # Decoded packets from decoder to printer
     packet_queue = Queue()
 
-    receiver = flowgraph.TopBlock(raw_queue)
-    decoder =  Decoder(raw_queue, packet_queue, sweep_timeout=args.channel_time,
-                       set_freq_fnc=receiver.set_frequency, locked_timeout=args.timeout)
-    printer = Printer(packet_queue, args.exclude, args.include, args.ignore_ack)
+    receiver = flowgraph.TopBlock(raw_queue, args.squelch)
+    decoder = blocks.Decoder(raw_queue, packet_queue, sweep_timeout=args.channel_time,
+                             set_freq_fnc=receiver.set_frequency, locked_timeout=args.timeout)
+
+    duplicator = blocks.Duplicator(packet_queue)
+    printer_queue = Queue()
+    printer = blocks.Printer(printer_queue, args.exclude, args.include, args.ignore_ack)
+    duplicator.connect(printer_queue)
 
     decoder.start()
     printer.start()
+    duplicator.start()
     receiver.run()
+
     decoder.stop()
     printer.stop()
+    duplicator.stop()
 
 if __name__ == '__main__':
     sys.exit(main() or 0)

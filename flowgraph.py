@@ -21,7 +21,7 @@ class TopBlock(gr.top_block):
     Prefilter the raw IQ stream and convert it to possible packets,
     which get put into queue for further analysis.
     """
-    def __init__(self, queue):
+    def __init__(self, queue, squelch_threshold=-70):
         gr.top_block.__init__(self)
 
         self.queue = queue
@@ -60,24 +60,24 @@ class TopBlock(gr.top_block):
         self.mag = blocks.complex_to_mag(1)
         self.connect(self.rf_filter, (self.mag, 0))
 
-        # Moving average
-        self.avg = blocks.moving_average_ff(20, 1/20., 4000)
-        self.connect(self.mag, (self.avg, 0))
+        # Squelch
+        self.squelch = analog.pwr_squelch_ff(squelch_threshold, 1e-1, 10, False)
+        self.connect(self.mag, (self.squelch, 0))
 
-        # Subtract some offset
-        self.offset = blocks.add_const_vff((-0.01, ))
-        self.connect(self.avg, (self.offset, 0))
+        # Subtract for slicing
+        self.subtract = blocks.add_const_vff((-math.exp(squelch_threshold/10.0), ))
+        self.connect(self.squelch, (self.subtract, 0))
 
         # Binary signal from carrier
         self.carrier_slicer = digital.binary_slicer_fb()
-        self.connect(self.offset, (self.carrier_slicer, 0))
+        self.connect(self.subtract, (self.carrier_slicer, 0))
 
         # Burst tagger needs short
         self.conv =  blocks.char_to_short(1)
         self.connect(self.carrier_slicer, (self.conv, 0))
 
         # Delay the detected carrier by a couple of symbols
-        self.delay = blocks.delay(gr.sizeof_short, samp_per_symb*30)
+        self.delay = blocks.delay(gr.sizeof_short, samp_per_symb*20)
         self.connect(self.conv, (self.delay, 0))
 
         self.tagger = blocks.burst_tagger(gr.sizeof_char)
@@ -90,7 +90,7 @@ class TopBlock(gr.top_block):
         #self.connect(self.tagger, (self.tagged_sink, 0))
 
         #self.carrier_sink = blocks.file_sink(gr.sizeof_float, 'carrier.raw', False)
-        #self.connect(self.offset, (self.carrier_sink, 0))
+        #self.connect(self.squelch, (self.carrier_sink, 0))
 
         #self.raw_sink = blocks.file_sink(gr.sizeof_gr_complex, 'iq.raw', False)
         #self.connect(self.source, (self.raw_sink, 0))
@@ -161,6 +161,8 @@ class RawPacketSink(gr.sync_block):
 
         start = 0
         for tag in tags:
+            if tag.key != 'burst':
+                continue
             if decoding:
                 assert not tag.value
                 stop = tag.offset - nread
@@ -179,16 +181,4 @@ class RawPacketSink(gr.sync_block):
 
         self.decoding = decoding
         return regions
-
-
-
-
-if __name__ == '__main__':
-    queue = Queue()
-    printer = Printer(queue)
-    printer.start()
-    receiver = TopBlock(queue)
-    receiver.set_frequency(2467500000)
-    receiver.run()
-    printer.stop()
 

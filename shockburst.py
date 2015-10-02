@@ -62,7 +62,7 @@ class Packet(object):
         Create a packet from a bitarray. If raw is set,
         the multiple preambles are searched and tested.
         """
-        preamble = bitarray('01010101')
+        preamble = bitarray('010101')
 
         if raw:
             results = bitstream.search(preamble)
