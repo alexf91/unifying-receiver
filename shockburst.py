@@ -10,22 +10,21 @@ class Packet(object):
     An Enhanced Shockburst packet
     """
 
-    address = property(lambda self: self._packet[self._addr_idx:self._size_idx].tobytes())
-    size    = property(lambda self: int(self._packet[self._size_idx:self._pid_idx].to01(), 2))
-    pid     = property(lambda self: int(self._packet[self._pid_idx:self._noack_idx].to01(), 2))
-    payload = property(lambda self: self._packet[self._pld_idx:self._crc_idx].tobytes())
-    addrlen = property(lambda self: self._addrlen)
-    crclen  = property(lambda self: self._crclen)
-    packet  = property(lambda self: self._packet.copy())
+    address = property(lambda self: self._address[:])
+    payload = property(lambda self: self._payload[:])
+    crc     = property(lambda self: self._crc[:])
+    pid     = property(lambda self: self._pid)
+    noack   = property(lambda self: self._noack)
+    size    = property(lambda self: self._size)
 
     def __init__(self, address, payload, crc, pid=0, noack=0):
         """
         Initializes a new Enhanced Shockburst packet.
-        Types: address : bytes
-               payload : bytes
+        Types: address : bytearray or bytes
+               payload : bytearray or bytes
                pid     : integer
                noack   : integer
-               crc     : bytes
+               crc     : bytearray or bytes
 
         This method should not be called by the user.
         Packets should be created with the classmethods.
@@ -37,30 +36,18 @@ class Packet(object):
         if not (0 <= pid <= 3):
             raise PacketError('Invalid packet ID')
 
-        packet = bitarray()
-        packet.frombytes(address)
-        packet.extend(bin(len(payload))[2:].zfill(6))
-        packet.extend(bin(pid)[2:].zfill(2))
-        packet.extend(str(int(noack)))
-        packet.frombytes(payload)
-        packet.frombytes(crc)
-
-        self._packet = packet
-        self._crclen = len(crc)
-        self._addrlen = len(address)
-
-        self._addr_idx = 0
-        self._size_idx = self._addrlen * 8
-        self._pid_idx  = self._size_idx + 6
-        self._noack_idx = self._pid_idx + 2
-        self._pld_idx  = self._noack_idx + 1
-        self._crc_idx  = self._pld_idx + len(payload)*8
+        self._address = bytearray(address)
+        self._payload = bytearray(payload)
+        self._crc = bytearray(crc)
+        self._pid = int(pid)
+        self._noack = int(bool(noack))
+        self._size = len(payload)
 
     @classmethod
     def from_bitarray(cls, bitstream, addr_len=5, crc_len=2, raw=False, tries=4):
         """
         Create a packet from a bitarray. If raw is set,
-        the multiple preambles are searched and tested.
+        multiple preambles are tried as the beginning of the packet.
         """
         preamble = bitarray('010101')
 
@@ -107,9 +94,9 @@ class Packet(object):
         raise PacketError('No valid packet found')
 
     def __str__(self):
-        address  = ''.join([hex(ord(x))[2:].zfill(2) for x in self.address])
+        address  = ''.join([hex(x)[2:].zfill(2) for x in self.address])
         if self.size:
-            payload  = ' '.join([hex(ord(x))[2:].zfill(2) for x in self.payload])
+            payload  = ' '.join([hex(x)[2:].zfill(2) for x in self.payload])
         else:
             payload = 'ACK'
 

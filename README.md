@@ -21,7 +21,7 @@ different for each device.
 Pointing devices like mouses and trackballs send 10 byte long packets on
 movements or clicks:
 
-00 C2 Buttons 00 X-speed Y-speed <00 or FF> 00 00 <unknown>
+00 C2 Buttons 00 (6 Bytes for movement)
 
 ## Keyboard devices
 Keyboard devices are encrypted and probably can't be sniffed.

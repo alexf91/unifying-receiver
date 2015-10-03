@@ -7,11 +7,11 @@ import shockburst
 
 
 def bytes_to_hexstring(bytes, seperator=''):
-        return seperator.join([hex(ord(x))[2:].zfill(2) for x in bytes])
+    return seperator.join([hex(x)[2:].zfill(2) for x in bytes])
 
 class Printer(threading.Thread):
     def __init__(self, queue, exclude=None, include=None, ignore_ack=False):
-        threading.Thread.__init__(self)
+        threading.Thread.__init__(self, name='Printer')
         self.running = True
         self.queue = queue
         self.exclude = exclude
@@ -78,7 +78,7 @@ class PayloadFilter(Filter):
 
 class Duplicator(threading.Thread):
     def __init__(self, inqueue, outqueues=[]):
-        threading.Thread.__init__(self)
+        threading.Thread.__init__(self, name='Duplicator')
         self.inqueue = inqueue
         self.outqueues = outqueues
         self.running = True
@@ -103,7 +103,7 @@ class Duplicator(threading.Thread):
 class Decoder(threading.Thread):
     def __init__(self, raw_queue, packet_queue, set_freq_fnc=None, locked_timeout=2,
                  sweep_timeout=1):
-        threading.Thread.__init__(self)
+        threading.Thread.__init__(self, name='Decoder')
         self.running = True
         self.raw_queue = raw_queue
         self.packet_queue = packet_queue

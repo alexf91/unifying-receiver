@@ -39,9 +39,6 @@ class TopBlock(gr.top_block):
         self.source.set_sample_rate(samp_rate)
         self.source.set_center_freq(2400000000, 0)
         self.source.set_bandwidth(12000000)
-        #self.source.set_gain(10, 0)
-        #self.source.set_if_gain(20, 0)
-        #self.source.set_bb_gain(20, 0)
 
         # Mix to baseband
         lowpass = filter.firdes.low_pass(samp_rate / resamp_rate, samp_rate, bandwidth, sharpness)
