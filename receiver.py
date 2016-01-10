@@ -5,7 +5,8 @@ import Queue
 import datetime
 import time
 import argparse
-import socket
+import subprocess
+import ctypes
 
 import numpy as np
 
@@ -22,30 +23,61 @@ def binstr_to_bytearray(binstr, length):
     else:
         return bytearray(length)
 
+class PcapFileHeader(ctypes.Structure):
+    _fields_ = [
+        ('magic_number',  ctypes.c_uint32),
+        ('version_major', ctypes.c_uint16),
+        ('version_minor', ctypes.c_uint16),
+        ('thiszone',      ctypes.c_uint32),
+        ('sigfigs',       ctypes.c_uint32),
+        ('snaplen',       ctypes.c_uint32),
+        ('network',       ctypes.c_uint32),
+    ]
 
-def udp_datagram(channel, packstr):
-    """
-    Creates a datagram which can be sent to Wireshark.
-    Format is <channel - address - length - pid - noack - payload - crc>
-    with size     1    +    5    +    1   +  1  +   1   +    32   +  2    = 43  bytes
-    """
-    addr   = packstr[0:40]
-    length = packstr[40:46]
-    pid    = packstr[46:48]
-    noack  = packstr[48]
-    pld    = packstr[49:-16]
-    crc    = packstr[-16:]
+    def __init__(self, linktype):
+        ctypes.Structure.__init__(self)
+        self.magic_number = 0xa1b2c3d4
+        self.version_major = 2
+        self.version_minor = 4
+        self.thiszone = 0
+        self.sigfigs = 0
+        self.snaplen = 2**16
+        self.network = linktype
 
-    dgram = bytearray(1 + 5 + 1 + 1 + 1 + 32 + 2)
-    dgram[0]      = channel
-    dgram[1:6]    = binstr_to_bytearray(addr, 5)
-    dgram[6]      = int(length, 2)
-    dgram[7]      = int(pid, 2)
-    dgram[8]      = int(noack, 2)
-    dgram[9:9+32] = binstr_to_bytearray(pld, 32)
-    dgram[-2:]    = binstr_to_bytearray(crc, 2)
+class PcapPacketHeader(ctypes.Structure):
+    _fields_ = [
+        ('ts_sec',   ctypes.c_uint32),
+        ('ts_usec',  ctypes.c_uint32),
+        ('incl_len', ctypes.c_uint32),
+        ('orig_len', ctypes.c_uint32),
+    ]
+        
+def pcap_write(fileobj, channel, packstr):
+    addr   = binstr_to_bytearray(packstr[0:40], 5)
+    length = int(packstr[40:46], 2)
+    pid    = int(packstr[46:48], 2)
+    noack  = int(packstr[48], 2)
+    pld    = binstr_to_bytearray(packstr[49:-16], length)
+    crc    = binstr_to_bytearray(packstr[-16:], 2)
     
-    return dgram
+    hdr = PcapPacketHeader()
+    t = time.time()
+    hdr.ts_sec  = int(t)
+    hdr.ts_usec = int((t % 1) * 1000000)
+    pkglen = 1 + 5 + 1 + 1 + length + 2
+    hdr.incl_len = pkglen
+    hdr.orig_len = pkglen
+
+    dgram       = bytearray(pkglen)
+    dgram[0]    = channel
+    dgram[1:6]  = addr
+    dgram[6]    = pid
+    dgram[7]    = noack
+    dgram[8:-2] = pld
+    dgram[-2:]  = crc
+
+    fileobj.write(hdr)
+    fileobj.write(dgram)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -58,11 +90,12 @@ def main():
         help='Time to scan in seconds. Defaults to infinity')
 
     args = parser.parse_args()
-    
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     channel = 0
     queue = Queue.Queue()
+
+    wireshark = subprocess.Popen('wireshark-gtk -k -i -'.split(), stdin=subprocess.PIPE)
+    wireshark.stdin.write(PcapFileHeader(147))
 
     tb = flowgraph.TopBlock(queue)
     tb.start()
@@ -84,8 +117,10 @@ def main():
             timeout = args.timeout
             packstr = ''.join([str(b) for b in packet])
 
-            dgram = udp_datagram(channel, packstr)
-            sock.sendto(dgram, ('127.0.0.1', args.port))
+            try:
+                pcap_write(wireshark.stdin, channel, packstr)
+            except IOError:
+                break
         except Queue.Empty:
             channel = (channel + 1) % len(flowgraph.channels)
             tb.set_frequency(flowgraph.channels[channel])
