@@ -1,7 +1,5 @@
 #!/usr/bin/python2
 
-import threading
-
 from gnuradio import blocks
 from gnuradio import filter
 from gnuradio import analog

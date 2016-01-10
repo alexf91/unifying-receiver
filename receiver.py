@@ -1,8 +1,6 @@
 from __future__ import print_function
 import sys
-import threading
 import Queue
-import datetime
 import time
 import argparse
 import subprocess
@@ -81,7 +79,6 @@ def pcap_write(fileobj, channel, packstr):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', '-p', type=int, choices=range(1, 2**16), default=48222)
     parser.add_argument('--lock', '-l', type=float, default=0.5,
         help='Time to lock on each channel while scanning')
     parser.add_argument('--timeout', '-t', type=float, default=2,
@@ -101,10 +98,7 @@ def main():
     tb.start()
     tb.set_frequency(flowgraph.channels[channel])
 
-    starttime = datetime.datetime.now()
-
     timeout = args.lock
-
     if args.scantime is None:
         loopcond = lambda: True
     else:
@@ -128,7 +122,6 @@ def main():
         except KeyboardInterrupt:
             break
 
-    stoptime = datetime.datetime.now()
     tb.stop()
     tb.wait()
 
